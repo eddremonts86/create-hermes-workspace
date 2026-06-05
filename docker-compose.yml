@@ -1,0 +1,61 @@
+# docker-compose.yml for the create-hermes-workspace.
+#
+# Usage:
+#   cp .env.example .env  &&  $EDITOR .env
+#   docker compose up -d
+#   docker compose exec hermes bash
+#
+# This is a thin wrapper over the nousresearch/hermes-agent image. The
+# workspace (./) is mounted as /opt/data so:
+#   - any file the agent creates inside the container is visible on the host
+#   - the host directory's git repo is the same one the agent sees
+#   - you can edit files in your editor of choice while the agent runs
+
+services:
+  hermes:
+    build: .
+    image: hermes-workspace:local
+    container_name: hermes-workspace
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      # Mount the workspace as the agent's data directory. Files created by
+      # the agent appear here on the host. Change this if you want the agent
+      # to operate on a different folder.
+      - ./:/opt/data
+
+    environment:
+      # ---- Container user (so files on the host stay owned by you) --------
+      - HERMES_UID=${HERMES_UID:-1000}
+      - HERMES_GID=${HERMES_GID:-1000}
+
+      # ---- LLM provider keys (set at least ONE) ----------------------------
+      - MINIMAX_API_KEY=${MINIMAX_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL:-https://api.anthropic.com}
+
+      # ---- GitHub integration (used by `make worktree-push`) --------------
+      - GITHUB_USER=${GITHUB_USER:-}
+
+      # ---- Optional: application port and base URL ------------------------
+      - PORT=${PORT:-3000}
+      - APP_URL=${APP_URL:-http://localhost:3000}
+
+      # ---- Optional: gateway integrations (uncomment + fill to enable) ----
+      # - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      # - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN:-}
+      # - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN:-}
+
+      # ---- Optional: log level ---------------------------------------------
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+
+    # Health check pings the agent's web UI. Optional but useful for `make up`
+    # to wait for readiness.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:${PORT:-3000}/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s

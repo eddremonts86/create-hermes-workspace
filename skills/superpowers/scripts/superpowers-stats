@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# superpowers-stats — query the gate-events.jsonl
+#
+# Subcommands:
+#   summary  — count events per gate (last 30 days, but the log only keeps 30d
+#              anyway, so this is effectively "all"), as markdown table
+#   recent   — last 20 events, newest first, as markdown table
+#   skipped  — only action=skipped or attempted, as markdown table
+#
+# Pipeable: pipe stdout to head, grep, less, etc.
+
+set -uo pipefail
+
+LOG_FILE="/opt/data/var/gate-events.jsonl"
+CMD="${1:-summary}"
+
+if [ ! -f "$LOG_FILE" ]; then
+  printf 'No events yet at %s\n' "$LOG_FILE" >&2
+  printf 'Run a gate-applying script (e.g. superpowers-self-check.sh) to generate events.\n' >&2
+  exit 1
+fi
+
+case "$CMD" in
+  summary)
+    printf '| Gate | Applied | Confirmed | Aborted | Skipped | Attempted | Missing | Loaded | Total |\n'
+    printf '|------|---------|-----------|---------|---------|-----------|---------|--------|-------|\n'
+    # `inputs` reads all JSONL objects as a stream; slurp reads all as array
+    jq -rs '
+      . as $events |
+      ($events | map(.gate) | unique | sort | .[] as $g |
+        ([$events[] | select(.gate == $g) | .action] |
+          {
+            applied:    map(select(. == "applied"))    | length,
+            confirmed:  map(select(. == "confirmed"))  | length,
+            aborted:    map(select(. == "aborted"))    | length,
+            skipped:    map(select(. == "skipped"))    | length,
+            attempted:  map(select(. == "attempted"))  | length,
+            missing:    map(select(. == "missing"))    | length,
+            loaded:     map(select(. == "loaded"))     | length,
+            total:      length
+          }) as $r |
+        "| \($g) | \($r.applied) | \($r.confirmed) | \($r.aborted) | \($r.skipped) | \($r.attempted) | \($r.missing) | \($r.loaded) | \($r.total) |"
+      )
+    ' < "$LOG_FILE"
+    ;;
+  recent)
+    printf '| Timestamp | Gate | Action | Skill | Session |\n'
+    printf '|-----------|------|--------|-------|---------|\n'
+    tail -n 20 "$LOG_FILE" | jq -r '
+      "| \(.ts) | \(.gate) | \(.action) | \(.skill // "-") | \(.session_id) |"
+    '
+    ;;
+  skipped)
+    printf '| Timestamp | Gate | Action | Session |\n'
+    printf '|-----------|------|--------|---------|\n'
+    jq -r 'select(.action == "skipped" or .action == "attempted") |
+      "| \(.ts) | \(.gate) | \(.action) | \(.session_id) |"
+    ' < "$LOG_FILE"
+    # Need --null-input=no; just stream filter
+    ;;
+  *)
+    printf 'Usage: superpowers-stats {summary|recent|skipped}\n' >&2
+    exit 1
+    ;;
+esac
