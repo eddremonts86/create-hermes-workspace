@@ -10,6 +10,17 @@
 #   - any file the agent creates inside the container is visible on the host
 #   - the host directory's git repo is the same one the agent sees
 #   - you can edit files in your editor of choice while the agent runs
+#
+# Cross-OS port mapping (Linux, macOS, Windows + Docker Desktop):
+#   - The dashboard listens on port 9119 inside the container (see
+#     /opt/hermes/docker/s6-rc.d/dashboard/run in the base image). We map
+#     it to the host via `ports:` so it works on every OS.
+#   - DO NOT use `network_mode: host` here: it works on Linux but Docker
+#     Desktop on mac/Windows uses a VM with isolated networking, so host
+#     mode silently breaks the dashboard on those platforms.
+#   - The application port (PORT, default 3000) is also mapped so apps
+#     spawned inside the workspace (via `make new-project`) are reachable
+#     from the host browser.
 
 services:
   hermes:
@@ -17,7 +28,15 @@ services:
     image: hermes-workspace:local
     container_name: hermes-workspace
     restart: unless-stopped
-    network_mode: host
+    ports:
+      # Dashboard (s6 service, listens on HERMES_DASHBOARD_PORT inside the
+      # container; default 9119 — see base image s6-rc.d/dashboard/run).
+      - "${DASHBOARD_PORT:-9119}:${DASHBOARD_PORT:-9119}"
+      # User app port (the apps you create with `make new-project` listen
+      # here). The base image's main-hermes wrapper uses PORT for nothing
+      # by default; this mapping is for the apps you run inside the
+      # workspace.
+      - "${PORT:-3000}:${PORT:-3000}"
     volumes:
       # Mount the workspace as the agent's data directory. Files created by
       # the agent appear here on the host. Change this if you want the agent
@@ -43,6 +62,18 @@ services:
       - PORT=${PORT:-3000}
       - APP_URL=${APP_URL:-http://localhost:3000}
 
+      # ---- Hermes dashboard (the web UI on :$DASHBOARD_PORT) --------------
+      # HERMES_DASHBOARD=1 activates the dashboard s6 service. Without it,
+      # the service exits 0 and s6 reports the slot as down (see
+      # /opt/hermes/docker/s6-rc.d/dashboard/run in the base image).
+      # HERMES_DASHBOARD_INSECURE=1 disables the OAuth gate so the
+      # dashboard is usable on a trusted LAN without a provider registered.
+      # Set to 0 in production behind a reverse proxy with proper auth.
+      - HERMES_DASHBOARD=${HERMES_DASHBOARD:-1}
+      - HERMES_DASHBOARD_INSECURE=${HERMES_DASHBOARD_INSECURE:-1}
+      - HERMES_DASHBOARD_HOST=${HERMES_DASHBOARD_HOST:-0.0.0.0}
+      - HERMES_DASHBOARD_PORT=${DASHBOARD_PORT:-9119}
+
       # ---- Optional: gateway integrations (uncomment + fill to enable) ----
       # - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
       # - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN:-}
@@ -51,10 +82,12 @@ services:
       # ---- Optional: log level ---------------------------------------------
       - LOG_LEVEL=${LOG_LEVEL:-info}
 
-    # Health check pings the agent's web UI. Optional but useful for `make up`
-    # to wait for readiness.
+    # Health check pings the dashboard. NOTE: the dashboard listens on
+    # DASHBOARD_PORT (default 9119), NOT on PORT (which is the user app
+    # port). Pointing this at PORT was a latent bug that made the
+    # healthcheck always fail on a stock workspace.
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:${PORT:-3000}/healthz"]
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:${DASHBOARD_PORT:-9119}/healthz"]
       interval: 30s
       timeout: 5s
       retries: 3
